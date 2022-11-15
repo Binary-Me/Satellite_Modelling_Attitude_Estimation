@@ -64,6 +64,10 @@ Kp=[1000 0 0; 0 0 0; 0 0 1000];
 w_cd=[0 5 0]';
 Kd=2000;
 
+%Covariance Matrix
+E=eye(3);
+O=0.1.*eye(9);
+
 dt=0.01;
 total_time=10;
 time=0;
@@ -131,30 +135,34 @@ ylabel("ω(t) (in rad/s)")
 legend('ŵx','ŵy','ŵz','ωx','ωy','ωz')
 
 %% Attitude Estimation from Sensor Data - Triad Algorithm
-%Home Tracker Sensor Output - g_wn
-%Star A Tracker Sensor output - h_wn
+%Home Tracker Sensor Output - g
+%Star A Tracker Sensor output - h
 %Measurements made in ground frame - g0 and h0
 Q_triad=zeros(4,1000); 
+C_triad=zeros(3,3,1000);
+D_triad=zeros(3,1000); 
 G=[uni(g0),uni(cross(g0,h0)),uni(cross(g0,cross(g0,h0)))];
 for i=1:(total_time/dt)
-    u=g_wn(:,i);
-    v=h_wn(:,i);
+    u=g(:,i);
+    v=h(:,i);
     B=[uni(u),uni(cross(u,v)),uni(cross(u,cross(u,v)))];
-    C_triad=G*transpose(B);
-    Q_triad(:,i)=Norm(Matrix_to_Quat(C_triad));
+    C_triad(:,:,i)=G*transpose(B);
+    Q_triad(:,i)=Norm(Matrix_to_Quat(C_triad(:,:,i)));
+    D_triad(:,i)=(2*Q_triad(1,i)).*(Q_triad(2:4,i))';
 end
 
 %% Attitude Estimation from Sensor Data - Davenport's Q Method
-% Vectors - h0,h_wn (Star A); g0,g_wn (Earth); k0,k_wn (Star B)
+% Vectors - h0,h (Star A); g0,g (Earth); k0,k (Star B)
 Q_qmethod=zeros(4,1000);
+D_qmethod=zeros(3,1000); 
 w1=2/3; w2=2/3; w3=2/3;
 v1_N=g0;
 v2_N=h0;
 v3_N=k0;
 for i=1:(total_time/dt)
-    v1_B=g_wn(:,i);
-    v2_B=h_wn(:,i);
-    v3_B=k_wn(:,i);
+    v1_B=g(:,i);
+    v2_B=h(:,i);
+    v3_B=k(:,i);
     B=w1.*(v1_B*v1_N')+w2.*(v2_B*v2_N')+w3.*(v3_B*v3_N');
     sigma=trace(B);
     S=B+B';
@@ -172,7 +180,60 @@ for i=1:(total_time/dt)
         end
     end
     Q_qmethod(:,i)=eigvec(:,ind);
+    D_qmethod(:,i)=(2*Q_qmethod(1,i)).*(Q_qmethod(2:4,i))';
 end
+
+%% Attitude Estimation - Kalman Filter 
+Q_kalman=zeros(4,1000);
+Q_kalman(:,1)=[1;0;0;0];
+D_kalman=zeros(3,1000); 
+r=zeros(4,1000);
+r(:,1)=[1;0;0;0];
+R=zeros(3,3,1000);
+for i=1:((total_time/dt)-1)
+    phi=mag(w(:,i))*dt/2;
+    temp=quatprod(Q_kalman(:,i),[cos(phi); uni(w(:,i)).*sin(phi)]);
+    r_temp=[1;0;0;0];
+    A=eye(3)+(crossprodv(w(:,i))).*-dt;
+    R_temp=A*R(:,:,i)*A' +E./4; %Predict Step
+    s=qinverse(temp);
+    z_temp=[quatprod(quatprod(s,[0;g0]),temp); quatprod(quatprod(s,[0;h0]),temp); quatprod(quatprod(s,[0;k0]),temp)];
+    u_temp=[z_temp(2:4);z_temp(6:8);z_temp(10:12)];
+    C=2.*[crossprodv(u_temp(1:3));crossprodv(u_temp(4:6));crossprodv(u_temp(7:9))];
+    L=R_temp*C'*inv(C*R_temp*C'+O);  %Update Step
+    R(:,:,i+1)=R_temp-L*C*R_temp;
+    r(2:4,i+1)=L*[g(:,i+1)-u_temp(1:3);h(:,i+1)-u_temp(4:6); k(:,i+1)-u_temp(7:9)];
+    r(1,i+1)=sqrt(1-(mag(r(2:4,i+1)))^2);
+    Q_kalman(:,i+1)=quatprod(temp, r(:,i+1));
+    D_kalman(:,i)=(2*Q_kalman(1,i)).*(Q_kalman(2:4,i))';
+end
+D_kalman(:,i)=(2*Q_kalman(1,i)).*(Q_kalman(2:4,i))'; %Because the loop runs still (total_time/dt)-1
+
+%% Comparing Estimated Attitude and True Attitude
+t2=tiledlayout(3,1);
+D=zeros(3,1000);
+for i=1:(total_time/dt)
+    D(:,i)=(2*Q(1,i)).*(Q(2:4,i))';
+end
+
+nexttile
+plot(axis,D,axis,D_triad);
+title('Attitude Estimation by Triad Method')
+xlabel("Time (in s)")
+legend('n_xsin(\phi)','n_ysin(\phi)','n_zsin(\phi)','n_xsin(\phi)_T','n_ysin(\phi)_T','n_zsin(\phi)_T');
+
+nexttile
+plot(axis,D,axis,D_qmethod);
+title('Attitude Estimation by Davenport Q Method')
+xlabel("Time (in s)")
+legend('n_xsin(\phi)','n_ysin(\phi)','n_zsin(\phi)','n_xsin(\phi)_Q','n_ysin(\phi)_Q','n_zsin(\phi)_Q');
+
+nexttile
+plot(axis,D,axis,D_kalman);
+title('Attitude Estimation by Kalman Filter')
+xlabel("Time (in s)")
+legend('n_xsin(\phi)','n_ysin(\phi)','n_zsin(\phi)','n_xsin(\phi)_{KF}','n_ysin(\phi)_{KF}','n_zsin(\phi)_{KF}');
+
 %% Functions 
 %To find the rotation Matrix corresponding to the Quaternion
 function C = quat_to_matrix(q)
@@ -242,12 +303,12 @@ function q=Matrix_to_Quat(C)
     q(4)=0.25*sqrt(1-C(1,1)-C(2,2)+C(3,3));    
 end
 
-function R = rqprod(v)
-    R=[0 v'; -v -crossprodv(v)];
+function R = rqprod(q)
+    R=[q(1) -q(2:4)'; q(2:4) ((q(1).*eye(3))+crossprodv(q(2:4)))];
 end
 
-function L = lqprod(u)
-    L=[0 -u'; u -crossprodv(u)];
+function L = lqprod(q)
+    L=[q(1) -q(2:4)'; q(2:4) ((q(1).*eye(3))-crossprodv(q(2:4)))];
 end
 
 function q_1 = qinverse(q)
