@@ -1,1 +1,2 @@
+## Attitude Estimation of a Satellite
 Modelled the attitude kinematics and dynamics of a satellite with user-controllable external moments from thrusters. Utilised the Triad algorithm, q-method (Davenport and Quest algorithms), and an extended attitude Kalman filter for precise attitude estimation from sensor measurements. Conducted a comprehensive analysis of each estimation algorithm, identifying their respective strengths and weaknesses.
